@@ -7,7 +7,6 @@ import com.example.demo.DTO.ProductDTO;
 import com.example.demo.Entity.ProductEntity;
 import com.example.demo.Repository.ProductRepository;
 import com.example.demo.Service.ProductService;
-import org.apache.coyote.BadRequestException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
@@ -32,7 +31,7 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     public List<ProductDTO> getAllProducts() {
-        List<ProductEntity> productEntityList = productRepository.findAll();
+        List<ProductEntity> productEntityList = productRepository.findAllByIsDeletedFalse();
         if (productEntityList.isEmpty()) {
             throw new NoSuchElementException("No products found in database.");
         }
@@ -45,7 +44,7 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     public ProductDTO getProductById(long id) {
-        Optional<ProductEntity> productEntity = productRepository.findById(id);
+        Optional<ProductEntity> productEntity = productRepository.findByIdAndIsDeletedFalse(id);
         if(productEntity.isPresent()) {
             return convertToDTO.toDTO(productEntity.get());
         }
@@ -54,7 +53,7 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     public ProductDTO getProductByName(String name) {
-        Optional<ProductEntity> productEntity = productRepository.findByName(name);
+        Optional<ProductEntity> productEntity = productRepository.findByProductNameAndIsDeletedFalse(name);
         if(productEntity.isPresent()) {
             return convertToDTO.toDTO(productEntity.get());
         }
@@ -65,6 +64,7 @@ public class ProductServiceImpl implements ProductService {
     @Override
     public ProductDTO addProduct(ProductDTO productDTO) {
         ProductEntity productEntity = converToEntity.toEntity(productDTO);
+        productEntity.setId(null);
         productEntity = productRepository.save(productEntity);
         return convertToDTO.toDTO(productEntity);
     }
@@ -84,12 +84,12 @@ public class ProductServiceImpl implements ProductService {
     @Transactional
     @Override
     public void deleteProduct(long id) {
-        // Xoa cung du lieu
+        // Xoa mem
         ProductEntity productEntity = productRepository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("Product not found with ID: " + id));
 
         try {
-            productRepository.deleteById(id);
+            productEntity.setDeleted(true);
         } catch (DataAccessException e) {
             throw new IllegalStateException("Failed to delete product: " + e.getMessage(), e);
         }
