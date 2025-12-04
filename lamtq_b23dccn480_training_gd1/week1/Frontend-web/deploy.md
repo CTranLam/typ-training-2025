@@ -1,1 +1,0 @@
-Link deploy FE profile : https://myprofile-ten-virid.vercel.app/
