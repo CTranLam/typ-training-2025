@@ -134,4 +134,237 @@
                 - Nếu header của message khớp với header queue => 
                 message được gửi vào queue
 
+2. Implement use caase trong project đang làm sử dụng RabbitMQ
+
+    - Trường hợp gửi email lấy mã otp để đổi mật khẩu
+
+    - B1 Sử dụng docker để tải môi tường RabbitMQ về:
+        - ![Minh họa](images/img4.png)
+
+
+    - B2 Thêm dependency vào project:
+        ```xml
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+        ```
+    - B3 Thêm cấu hình vào properties:
+        ```
+        spring:
+            rabbitmq:
+                host: localhost
+                port: 5672
+                username: guest
+                password: guest
+        ```
+
+    - B4 Cấu hình RabbitMQ:
+        ```java
+        @Configuration
+        public class RabbitMQConfig {
+
+            public static final String QUEUE_NAME = "bookingcare_queue";
+            public static final String EXCHANGE_NAME = "bookingcare_exchange";
+            public static final String ROUTING_KEY = "bookingcare_routingkey";
+
+            @Bean
+            public Queue queue() {
+                return new Queue(QUEUE_NAME, true);
+            }
+
+            @Bean
+            public DirectExchange exchange() {
+                return new DirectExchange(EXCHANGE_NAME);
+            }
+
+            @Bean
+            public Binding binding(Queue queue, DirectExchange exchange) {
+                return BindingBuilder.bind(queue).to(exchange).with(ROUTING_KEY);
+            }
+
+            // JSON converter
+            @Bean
+            public Jackson2JsonMessageConverter jackson2JsonMessageConverter() {
+                return new Jackson2JsonMessageConverter();
+            }
+
+            // RabbitTemplate dùng JSON converter
+            @Bean
+            public RabbitTemplate rabbitTemplate(ConnectionFactory connectionFactory) {
+                RabbitTemplate template = new RabbitTemplate(connectionFactory);
+                template.setMessageConverter(jackson2JsonMessageConverter());
+                return template;
+            }
+
+            // Listener container factory dùng JSON converter
+            @Bean
+            public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
+                    ConnectionFactory connectionFactory
+            ) {
+                SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+                factory.setConnectionFactory(connectionFactory);
+                factory.setMessageConverter(jackson2JsonMessageConverter());
+                return factory;
+            }
+        }
+        ```
+
+    - B5 DTO gửi qua RabbitMQ:
+        ```java
+        @Data
+        @AllArgsConstructor
+        @NoArgsConstructor
+        public class EmailMessageDTO {
+            private String to;
+            private String subject;
+            private String content;
+        }
+
+        ```
+    - B6 Producer gửi message:
+        ```java
+        @Service
+        @RequiredArgsConstructor
+        public class EmailProducerService {
+
+            private final RabbitTemplate rabbitTemplate;
+
+            @Async
+            public void sendEmailAsync(EmailMessageDTO emailMessageDTO) {
+                rabbitTemplate.convertAndSend(
+                        RabbitMQConfig.EXCHANGE_NAME,
+                        RabbitMQConfig.ROUTING_KEY,
+                        emailMessageDTO
+                );
+            }
+        }
+        ```
+    
+    - B7 Consumer - Nhận message và gửi email:
+        ```java
+        @Component
+        public class EmailConsumer {
+
+            private final IEmailService emailService;
+
+            public EmailConsumer(IEmailService emailService) {
+                this.emailService = emailService;
+            }
+
+            @RabbitListener(
+                    queues = RabbitMQConfig.QUEUE_NAME,
+                    containerFactory = "rabbitListenerContainerFactory"
+            )
+            public void handleEmailMessage(EmailMessageDTO dto) {
+                System.out.println("Received email to: " + dto.getTo());
+                emailService.sendEmail(dto.getTo(), dto.getSubject(), dto.getContent());
+            }
+        }
+        ```
+    - B8 Service gửi email:
+        ```java
+        @Service
+        @RequiredArgsConstructor
+        public class EmailServiceImpl implements IEmailService {
+
+            private final JavaMailSender mailSender;
+
+            @Async
+            @Override
+            public void sendEmail(String to, String subject, String content) {
+                SimpleMailMessage message = new SimpleMailMessage();
+                message.setTo(to);
+                message.setSubject(subject);
+                message.setText(content);
+                message.setFrom("tql213598@gmail.com");
+                mailSender.send(message);
+            }
+        }
+        ```
+
+    - B9 API gọi Producer:
+        ```java
+        @PostMapping("/forgot-password")
+        public ResponseEntity<?> sendOtp(@RequestBody Map<String, String> request) {
+            String email = request.get("email");
+
+            if (email == null || email.isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("message", "Email không được để trống"));
+            }
+
+            try {
+                userService.sendOtp(email);
+                return ResponseEntity.ok(Map.of("message", "OTP đã được gửi đến email của bạn"));
+            } catch (NoSuchElementException e) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", "Email không tồn tại"));
+            }
+        }
+        ```
+    - Flow tổng thể: Client gọi API sendOTP ==> OTP được lưu vào DB 
+    ngay ==> Producer gửi EmailMessageDTO vào RabbitMQ ( bất đồng bộ)
+    ==>Client nhận response ngay mà không cần chờ email gửi xong ==>
+    Consumer nhận message và gọi EmailService gửi OTP qua Gmail
+
+    - Xem video demo và project được đính kèm để có cái nhìn rõ hơn nữa
+
+3. Lưu ý khi sử dụng MQ
+    - Khi triển khai hệ thống dựa trên **Message Queue** như RabbitMQ,
+    cần chú ý các vấn đề quan trọng để đảm bảo độ tin cậy, tránh lỗi,
+    và duy trì tính nhất quán.
+
+    - Tính bất biến khi thực thi nhiều lần:
+        - Vấn đề: Message có thể được gửi hoặc nhận nhiều lần do retry, network failure hoặc consumer crash.
+        - Giải pháp: Consumer nên thiết kế **idempotent**, nghĩa là xử lý message nhiều lần vẫn cho kết quả giống nhau.
+
+        - Ví dụ:
+            ```java
+            @RabbitListener(queues = RabbitMQConfig.QUEUE_NAME)
+            public void handleEmailMessage(EmailMessageDTO dto) {
+                // Kiểm tra OTP đã gửi chưa
+                if (!otpAlreadySent(dto.getTo(), dto.getContent())) {
+                    emailService.sendEmail(dto.getTo(), dto.getSubject(), dto.getContent());
+                    markOtpAsSent(dto.getTo(), dto.getContent());
+                }
+            }
+            ```
+    - Duplicate messages (message trùng lặp):
+        - RabbitMQ không đảm bảo mỗi message chỉ được nhận 1 lần
+        - Consumer cần xử lý duplicate để tránh gửi email hoặc ghi dữ liệu nhiều lần
+        - Ví dụ:
+            - Lưu message ID hoặc OTP trong DB
+            - Trước khi thực hiện hành động, kiểm tra đã xử lý chưa
+            - Nếu đã xử lý, bỏ qua
+
+    - Message ordering (thứ tự message):
+        - RabbitMQ không đảm bảo thứ tự message khi có nhiều consumer
+        - Nếu thứ tự quan trọng (ví dụ: update trạng thái OTP) nên:
+            - Dùng single consumer cho queue
+            - Thêm sequence number trong message để consumer sắp xếp trước khi xử lý
+
+    - Message persistence (bền vững của message):
+        - Để message không bị mất khi RabbitMQ crash:
+            - Queue phải durable (new Queue("queueName", true))
+            - Message phải persistent (MessageProperties.PERSISTENT_TEXT_PLAIN)
+            ```java
+                rabbitTemplate.convertAndSend(
+                    RabbitMQConfig.EXCHANGE_NAME,
+                    RabbitMQConfig.ROUTING_KEY,
+                    dto,
+                    message -> {
+                        message.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
+                        return message;
+                    }
+                );
+            ```
+    - Retry và Dead Letter Queue (DLQ):
+        - Nếu consumer xử lý lỗi, RabbitMQ có thể retry message nhiều lần.
+        - Sử dụng Dead Letter Queue để lưu các message lỗi, tránh retry vô hạn.    
+
+    - Monitoring và alert:
+        - Giám sát queue length, consumer health, message age.
+        - Khi queue backlog tăng hoặc message quá lâu chưa xử lý => trigger alert để xử lý kịp thời.
+
         

@@ -37,7 +37,7 @@ public class WebSecurityConfig {
                 .authorizeHttpRequests(requests -> {
                     requests
                             .requestMatchers("/api/users/register", "/api/users/login","/api/users/forgot-password",
-                                    "/api/users/verify-otp","/api/users/reset-password","/api/chat", "/api/chat-with-image","/api/payment/**").permitAll()
+                                    "/api/users/verify-otp","/api/users/reset-password","/api/chat", "/api/chat-with-image","/api/payment/**", "/api/message/send").permitAll()
                             .requestMatchers(GET, "/api/admin/users", "/api/admin/users/*").hasRole("ADMIN")
                             .requestMatchers(DELETE, "/api/admin/users/*").hasRole("ADMIN")
                             .requestMatchers(PUT,"/api/admin/users/*").hasRole("ADMIN")

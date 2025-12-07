@@ -1,9 +1,7 @@
 package com.bookingcare.service.impl;
 
-import com.bookingcare.DTO.PatientProfileDTO;
-import com.bookingcare.DTO.PatientResponseDTO;
-import com.bookingcare.DTO.PatientUpdateDTO;
-import com.bookingcare.DTO.UserDTO;
+import com.bookingcare.DTO.*;
+import com.bookingcare.configuration.RabbitMQConfig;
 import com.bookingcare.converter.PatientConverter;
 import com.bookingcare.entity.*;
 import com.bookingcare.enums.Gender;
@@ -11,6 +9,7 @@ import com.bookingcare.filters.JwtTokenFilter;
 import com.bookingcare.repository.*;
 import com.bookingcare.service.IEmailService;
 import com.bookingcare.service.IUserService;
+import com.bookingcare.service.msgRabbitMQ.EmailProducerService;
 import com.bookingcare.utils.JwtTokenUtil;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
@@ -18,6 +17,7 @@ import lombok.AllArgsConstructor;
 import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import org.apache.catalina.User;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -27,6 +27,8 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronizationAdapter;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -36,7 +38,6 @@ import java.util.stream.Collectors;
 @Service
 @AllArgsConstructor
 @NoArgsConstructor
-@Transactional
 public class UserServiceImpl implements IUserService {
     @Autowired
     private UserRepository userRepository;
@@ -62,6 +63,11 @@ public class UserServiceImpl implements IUserService {
     private PasswordResetOtpRepository passwordResetOtpRepository;
     @Autowired
     private IEmailService  emailService;
+    @Autowired
+    private RabbitTemplate rabbitTemplate;
+    @Autowired
+    private EmailProducerService emailProducerService;
+
 
     @Transactional
     @Override
@@ -121,6 +127,7 @@ public class UserServiceImpl implements IUserService {
         return jwtTokenUtil.generateToken(userEntity); // token duoc sinh ra se duoc su dung de vao cac api, truoc khi vao cac api dung token vao websecurityConfig de xem quyen
     }
 
+    @Transactional
     @Override
     public void sendOtp(String email) {
         UserEntity user = userRepository.findByUserName(email)
@@ -132,10 +139,23 @@ public class UserServiceImpl implements IUserService {
         otpEntity.setEmail(email);
         otpEntity.setOtp(otp);
         otpEntity.setExpiresAt(LocalDateTime.now().plusMinutes(3));
-
         passwordResetOtpRepository.save(otpEntity);
 
-        emailService.sendEmail(email, "Mã OTP đặt lại mật khẩu", "OTP của bạn là: " + otp);
+        EmailMessageDTO emailMessageDTO = new EmailMessageDTO(
+                email,
+                "Mã OTP đặt lại mật khẩu",
+                "OTP của bạn là: "+otp
+        );
+
+//        emailService.sendEmail(email, "Mã OTP đặt lại mật khẩu", "OTP của bạn là: " + otp);
+//        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
+//            @Override
+//            public void afterCommit() {
+//                emailProducerService.sendEmailAsync(emailMessageDTO);
+//            }
+//        });
+        emailProducerService.sendEmailAsync(emailMessageDTO);
+        System.out.println("ok");
     }
 
     @Override
